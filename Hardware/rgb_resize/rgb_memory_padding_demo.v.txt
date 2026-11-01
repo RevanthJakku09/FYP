@@ -1,0 +1,162 @@
+
+`timescale 1ns / 1ps
+
+module rgb_memory_padding_demo #(
+    parameter IN_W       = 4,
+    parameter IN_H       = 3,
+    parameter OUT_W      = 6,
+    parameter OUT_H      = 6,
+    parameter ADDR_WIDTH = 4,
+    parameter DEPTH      = 16
+)(
+    input wire clk,
+
+    input wire                  wr_en,
+    input wire [ADDR_WIDTH-1:0] wr_addr,
+    input wire [23:0]           wr_pixel,
+
+    input wire [15:0] x_out,
+    input wire [15:0] y_out,
+
+    output reg        pixel_valid,
+    output reg [23:0] pixel_out
+);
+
+    // 1. Calculate aspect-ratio-preserving dimensions
+
+    localparam integer WIDTH_LIMITED =
+        (OUT_W * IN_H <= OUT_H * IN_W);
+
+    localparam integer SCALED_W =
+        WIDTH_LIMITED ? OUT_W : (IN_W * OUT_H / IN_H);
+
+    localparam integer SCALED_H =
+        WIDTH_LIMITED ? (IN_H * OUT_W / IN_W) : OUT_H;
+
+    localparam integer PAD_LEFT =
+        (OUT_W - SCALED_W) / 2;
+
+    localparam integer PAD_TOP =
+        (OUT_H - SCALED_H) / 2;
+
+    // 2. Canvas and resized-image boundaries
+
+    wire inside_canvas;
+    wire inside_scaled;
+
+    assign inside_canvas =
+        (x_out < OUT_W) &&
+        (y_out < OUT_H);
+
+    assign inside_scaled =
+        (x_out >= PAD_LEFT) &&
+        (x_out < PAD_LEFT + SCALED_W) &&
+        (y_out >= PAD_TOP) &&
+        (y_out < PAD_TOP + SCALED_H);
+
+    wire [15:0] local_x;
+    wire [15:0] local_y;
+
+    assign local_x = x_out - PAD_LEFT;
+    assign local_y = y_out - PAD_TOP;
+
+    // 3. Source coordinates and interpolation weights
+
+    wire [15:0] x0, x1, y0, y1;
+    wire [8:0] a, b;
+    wire coords_valid;
+
+    resize_coords coords_inst (
+        .in_w(IN_W),
+        .in_h(IN_H),
+        .scaled_w(SCALED_W),
+        .scaled_h(SCALED_H),
+        .pad_left(16'd0),
+        .pad_top(16'd0),
+        .scale_num(16'd1),
+        .scale_den(16'd1),
+        .x_out(local_x),
+        .y_out(local_y),
+        .pixel_valid(coords_valid),
+        .x0(x0),
+        .x1(x1),
+        .y0(y0),
+        .y1(y1),
+        .a(a),
+        .b(b)
+    );
+
+    // 4. Row-major source-memory addresses
+
+    wire [ADDR_WIDTH-1:0] rd_addr00;
+    wire [ADDR_WIDTH-1:0] rd_addr10;
+    wire [ADDR_WIDTH-1:0] rd_addr01;
+    wire [ADDR_WIDTH-1:0] rd_addr11;
+
+    assign rd_addr00 = y0 * IN_W + x0;
+    assign rd_addr10 = y0 * IN_W + x1;
+    assign rd_addr01 = y1 * IN_W + x0;
+    assign rd_addr11 = y1 * IN_W + x1;
+
+    // 5. Read the four neighboring RGB pixels
+
+    wire [23:0] p00, p10, p01, p11;
+
+    rgb_frame_memory #(
+        .ADDR_WIDTH(ADDR_WIDTH),
+        .DEPTH(DEPTH)
+    ) frame_mem (
+        .clk(clk),
+        .wr_en(wr_en),
+        .wr_addr(wr_addr),
+        .wr_pixel(wr_pixel),
+        .rd_addr00(rd_addr00),
+        .rd_addr10(rd_addr10),
+        .rd_addr01(rd_addr01),
+        .rd_addr11(rd_addr11),
+        .rd_pixel00(p00),
+        .rd_pixel10(p10),
+        .rd_pixel01(p01),
+        .rd_pixel11(p11)
+    );
+
+    // 6. Align controls with synchronous memory outputs
+
+    reg [8:0] a_reg;
+    reg [8:0] b_reg;
+    reg valid_reg;
+    reg canvas_valid_reg;
+
+    always @(posedge clk) begin
+        a_reg <= a;
+        b_reg <= b;
+        valid_reg <= coords_valid && inside_scaled;
+        canvas_valid_reg <= inside_canvas;
+    end
+
+    // 7. RGB bilinear interpolation
+
+    wire [23:0] resized_pixel;
+
+    resize resize_inst (
+        .p00(p00),
+        .p10(p10),
+        .p01(p01),
+        .p11(p11),
+        .a(a_reg),
+        .b(b_reg),
+        .pixel_out(resized_pixel)
+    );
+
+    // 8. Output RGB pixel; padding is black
+
+    always @(*) begin
+        pixel_valid = canvas_valid_reg;
+
+        if (canvas_valid_reg && valid_reg)
+            pixel_out = resized_pixel;
+        else
+            pixel_out = 24'h000000;
+    end
+
+endmodule

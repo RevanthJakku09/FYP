@@ -1,0 +1,58 @@
+
+`timescale 1ns / 1ps
+
+module rgb_frame_memory #(
+    parameter ADDR_WIDTH = 4,
+    parameter DEPTH      = 16
+)(
+    input  wire        clk,
+
+    // Write interface: load RGB pixels into memory.
+    input  wire        wr_en,
+    input  wire [ADDR_WIDTH-1:0] wr_addr,
+    input  wire [23:0] wr_pixel,
+
+    // Four independent read addresses.
+    input  wire [ADDR_WIDTH-1:0] rd_addr00,
+    input  wire [ADDR_WIDTH-1:0] rd_addr10,
+    input  wire [ADDR_WIDTH-1:0] rd_addr01,
+    input  wire [ADDR_WIDTH-1:0] rd_addr11,
+
+    // Four registered RGB outputs.
+    output reg  [23:0] rd_pixel00,
+    output reg  [23:0] rd_pixel10,
+    output reg  [23:0] rd_pixel01,
+    output reg  [23:0] rd_pixel11
+);
+
+    reg [23:0] mem [0:DEPTH-1];
+
+    // Synchronous write and synchronous reads.
+    // Read data is updated on the rising clock edge.
+    always @(posedge clk) begin
+
+        if (wr_en && (wr_addr < DEPTH))
+            mem[wr_addr] <= wr_pixel;
+
+        if (rd_addr00 < DEPTH)
+            rd_pixel00 <= mem[rd_addr00];
+        else
+            rd_pixel00 <= 24'h000000;
+
+        if (rd_addr10 < DEPTH)
+            rd_pixel10 <= mem[rd_addr10];
+        else
+            rd_pixel10 <= 24'h000000;
+
+        if (rd_addr01 < DEPTH)
+            rd_pixel01 <= mem[rd_addr01];
+        else
+            rd_pixel01 <= 24'h000000;
+
+        if (rd_addr11 < DEPTH)
+            rd_pixel11 <= mem[rd_addr11];
+        else
+            rd_pixel11 <= 24'h000000;
+    end
+
+endmodule

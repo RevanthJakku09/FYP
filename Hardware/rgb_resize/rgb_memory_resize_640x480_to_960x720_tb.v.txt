@@ -1,0 +1,188 @@
+
+`timescale 1ns / 1ps
+
+module rgb_memory_resize_640x480_to_960x720_tb;
+
+    localparam integer IN_W        = 640;
+    localparam integer IN_H        = 480;
+    localparam integer OUT_W       = 960;
+    localparam integer OUT_H       = 720;
+    localparam integer IN_PIXELS   = IN_W * IN_H;
+    localparam integer OUT_PIXELS  = OUT_W * OUT_H;
+    localparam integer ADDR_WIDTH  = 19;
+
+    reg clk;
+    reg wr_en;
+    reg [ADDR_WIDTH-1:0] wr_addr;
+    reg [23:0] wr_pixel;
+    reg [15:0] x_out;
+    reg [15:0] y_out;
+
+    wire pixel_valid;
+    wire [23:0] pixel_out;
+
+    integer i;
+    integer x;
+    integer y;
+    integer errors;
+    integer checked;
+    integer file_handle;
+
+    // Device under test.
+    // 640x480 RGB -> 960x720 RGB.
+    rgb_memory_padding_demo #(
+        .IN_W(IN_W),
+        .IN_H(IN_H),
+        .OUT_W(OUT_W),
+        .OUT_H(OUT_H),
+        .ADDR_WIDTH(ADDR_WIDTH),
+        .DEPTH(IN_PIXELS)
+    ) dut (
+        .clk(clk),
+        .wr_en(wr_en),
+        .wr_addr(wr_addr),
+        .wr_pixel(wr_pixel),
+        .x_out(x_out),
+        .y_out(y_out),
+        .pixel_valid(pixel_valid),
+        .pixel_out(pixel_out)
+    );
+
+    // 100 MHz simulation clock.
+    initial clk = 1'b0;
+    always #5 clk = ~clk;
+
+    // Deterministic RGB input pattern.
+    // R = (x + y) mod 256
+    // G = (2*x + y) mod 256
+    // B = (x + 3*y) mod 256
+    task make_expected_pixel;
+        input integer px;
+        input integer py;
+        output [23:0] rgb;
+        begin
+            rgb[23:16] = (px + py) % 256;
+            rgb[15:8]  = (2*px + py) % 256;
+            rgb[7:0]   = (px + 3*py) % 256;
+        end
+    endtask
+
+    initial begin
+        wr_en = 0;
+        wr_addr = 0;
+        wr_pixel = 0;
+        x_out = 0;
+        y_out = 0;
+        errors = 0;
+        checked = 0;
+
+        $display("========================================");
+        $display("RGB FPGA RESIZE TEST");
+        $display("Input : 640x480 RGB");
+        $display("Output: 960x720 RGB");
+        $display("Input pixels : %0d", IN_PIXELS);
+        $display("Output pixels: %0d", OUT_PIXELS);
+        $display("========================================");
+
+        // Open output file before processing.
+        file_handle = $fopen(
+            "C:/Users/bhanu/Downloads/FYP-main/FYP-main/Software/golden_model/rgb_960x720_output.txt",
+            "w"
+        );
+
+        if (file_handle == 0) begin
+            $display("ERROR: Cannot open output file.");
+            $display("Check the output folder path.");
+            $finish;
+        end
+
+        $display("Output file opened successfully.");
+        $display("Writing input frame...");
+
+        // Write all 640x480 source pixels into memory.
+        for (i = 0; i < IN_PIXELS; i = i + 1) begin
+            @(negedge clk);
+
+            x = i % IN_W;
+            y = i / IN_W;
+
+            wr_en = 1'b1;
+            wr_addr = i;
+            make_expected_pixel(x, y, wr_pixel);
+        end
+
+        @(negedge clk);
+        wr_en = 1'b0;
+        wr_addr = 0;
+        wr_pixel = 0;
+
+        repeat (2) @(negedge clk);
+
+        $display("Input frame loaded.");
+        $display("Resizing and exporting output frame...");
+
+        // Scan the complete 960x720 output.
+        for (y = 0; y < OUT_H; y = y + 1) begin
+            for (x = 0; x < OUT_W; x = x + 1) begin
+
+                // Present the output coordinate.
+                @(negedge clk);
+                x_out = x;
+                y_out = y;
+
+                // Wait for synchronous memory and control pipeline.
+                @(posedge clk);
+                #1;
+
+                checked = checked + 1;
+
+                if (pixel_valid !== 1'b1) begin
+                    errors = errors + 1;
+                    if (errors <= 20)
+                        $display(
+                            "ERROR: invalid output coordinate (%0d,%0d)",
+                            x, y
+                        );
+                end
+
+                if ((^pixel_out) === 1'bx) begin
+                    errors = errors + 1;
+                    if (errors <= 20)
+                        $display(
+                            "ERROR: unknown RGB pixel at (%0d,%0d)",
+                            x, y
+                        );
+                end
+
+                // File format: x y RRGGBB
+                $fdisplay(
+                    file_handle,
+                    "%0d %0d %06h",
+                    x, y, pixel_out
+                );
+            end
+
+            if (((y + 1) % 40) == 0)
+                $display(
+                    "Completed row %0d / %0d",
+                    y + 1, OUT_H
+                );
+        end
+
+        $fclose(file_handle);
+
+        $display("========================================");
+        $display("Output pixels checked: %0d", checked);
+        $display("RTL errors: %0d", errors);
+        $display("Output: rgb_960x720_output.txt");
+
+        if ((errors == 0) && (checked == OUT_PIXELS))
+            $display("RGB 640x480 TO 960x720 TEST PASSED");
+        else
+            $display("RGB 640x480 TO 960x720 TEST FAILED");
+
+        $display("========================================");
+        $finish;
+    end
+
+endmodule

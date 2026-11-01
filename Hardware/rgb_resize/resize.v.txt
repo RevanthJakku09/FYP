@@ -1,0 +1,62 @@
+
+module resize (
+    input  wire [230] p00,
+    input  wire [230] p10,
+    input  wire [230] p01,
+    input  wire [230] p11,
+
+    input  wire [80] a,
+    input  wire [80] b,
+
+    output wire [230] pixel_out
+);
+
+     RGB pixel format [2316] = R,
+                       [158]  = G,
+                       [70]   = B
+
+    function [70] bilinear;
+        input [70] q00, q10, q01, q11;
+        input [80] alpha, beta;
+
+        reg [80] A, B;
+        reg [170] w00, w10, w01, w11;
+        reg [250] t00, t10, t01, t11;
+        reg [270] accum;
+
+        begin
+            A = 9'd256 - alpha;
+            B = 9'd256 - beta;
+
+            w00 = A  B;
+            w10 = alpha  B;
+            w01 = A  beta;
+            w11 = alpha  beta;
+
+            t00 = q00  w00;
+            t10 = q10  w10;
+            t01 = q01  w01;
+            t11 = q11  w11;
+
+            accum = t00 + t10 + t01 + t11;
+
+            bilinear = (accum + 28'd32768)  16;
+        end
+    endfunction
+
+     Red channel
+    assign pixel_out[2316] =
+        bilinear(p00[2316], p10[2316],
+                 p01[2316], p11[2316], a, b);
+
+     Green channel
+    assign pixel_out[158] =
+        bilinear(p00[158], p10[158],
+                 p01[158], p11[158], a, b);
+
+     Blue channel
+    assign pixel_out[70] =
+        bilinear(p00[70], p10[70],
+                 p01[70], p11[70], a, b);
+
+endmodule
